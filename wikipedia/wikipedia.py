@@ -1,16 +1,22 @@
+#https://www.mediawiki.org/wiki/API:Main_page
+
 from __future__ import unicode_literals
 
 import requests
+import shutil
 import time
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from .exceptions import (
+from exceptions import (
   PageError, DisambiguationError, RedirectError, HTTPTimeoutError,
   WikipediaException, ODD_ERROR_MESSAGE)
-from .util import cache, stdout_encode, debug
+from util import cache, stdout_encode, debug
+
 import re
+import csv
+import wget
 
 API_URL = 'http://en.wikipedia.org/w/api.php'
 RATE_LIMIT = False
@@ -89,7 +95,10 @@ def search(query, results=10, suggestion=False):
   * results - the maxmimum number of results returned
   * suggestion - if True, return results and suggestion (if any) in a tuple
   '''
-
+  
+  if(len(query) == 0):
+    return list(query)
+  
   search_params = {
     'list': 'search',
     'srprop': '',
@@ -247,7 +256,7 @@ def summary(title, sentences=0, chars=0, auto_suggest=True, redirect=True):
 
   request = _wiki_request(query_params)
   summary = request['query']['pages'][pageid]['extract']
-
+  #summary = re.sub("\s\s+" , " ", summary)
   return summary
 
 
@@ -549,8 +558,32 @@ class WikipediaPage(object):
         })
         if 'imageinfo' in page
       ]
-
+	  
     return self._images
+
+  @property
+  def images_download(self):
+    '''
+    Download images on the wikipedia page.
+    '''
+
+    if not getattr(self, '_images', False):
+      self._images = [
+        page['imageinfo'][0]['url']
+        for page in self.__continued_query({
+          'generator': 'images',
+          'gimlimit': 'max',
+          'prop': 'imageinfo',
+          'iiprop': 'url',
+        })
+        if 'imageinfo' in page
+      ]
+    
+    image_name = []
+    for url in range(0, len(self._images)):
+      image_name.append(wget.download(self._images[url]))
+    return image_name
+   
 
   @property
   def coordinates(self):
@@ -564,7 +597,7 @@ class WikipediaPage(object):
         'titles': self.title,
       }
 
-      request = _wiki_request(query_params)
+      request = _wiki_request,(query_params)
 
       if 'query' in request:
         coordinates = request['query']['pages'][self.pageid]['coordinates']
@@ -597,11 +630,6 @@ class WikipediaPage(object):
 
   @property
   def links(self):
-    '''
-    List of titles of Wikipedia page links on a page.
-
-    .. note:: Only includes articles from namespace 0, meaning no Category, User talk, or other meta-Wikipedia pages.
-    '''
 
     if not getattr(self, '_links', False):
       self._links = [
@@ -740,3 +768,65 @@ def _wiki_request(params):
     RATE_LIMIT_LAST_CALL = datetime.now()
 
   return r.json()
+
+
+def lang_pages(title):
+  '''
+  Returns all the languages that a page is available in.
+  '''
+  results = search(title, results=1, suggestion=True)
+  langs = []
+  params = {
+    "action": "parse",  
+    "page": title,
+    "format": "json"
+    }
+  if results:
+    raw_result = requests.get(API_URL, params=params)
+    result_json = raw_result.json()["parse"]["langlinks"]
+    for i in range(0, len(result_json)):
+      langs.append(result_json[i]["langname"])
+      
+  return langs
+
+
+def lang_page_links(title):
+  '''
+  Returns the links available in a particular page.
+  '''
+  results = search(title, results=1, suggestion=True)
+  langs = []
+  params = {
+    "action": "parse",  
+    "page": title,
+    "format": "json"
+    }
+  if results:
+    raw_result = requests.get(API_URL, params=params)
+    result_json = raw_result.json()["parse"]["langlinks"]
+    for i in range(0, len(result_json)):
+      langs.append(result_json[i]["url"])
+      
+  return langs
+
+def get_table():
+    '''
+	Parse a section of a page, fetch its table data and save it to a CSV file
+    '''
+    res = S.get(url=URL, params=PARAMS)
+    data = res.json()
+    wikitext = data['parse']['wikitext']['*']
+    lines = wikitext.split('|-')
+    entries = []
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("|"):
+            table = line[2:].split('||')
+            entry = table[0].split("|")[0].strip("'''[[]]\n"), table[0].split("|")[1].strip("\n")
+            entries.append(entry)
+
+    file = open("table.csv", "w")
+    writer = csv.writer(file)
+    writer.writerows(entries)
+    file.close()
